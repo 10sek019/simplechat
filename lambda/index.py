@@ -2,12 +2,15 @@
 import json
 import os
 import re  # 正規表現モジュールをインポート
+from botocore.exceptions import ClientError
 import urllib.request
 
-model_url = 'https://86d9-34-125-105-210.ngrok-free.app/generate'
+# モデルID
+MODEL_ID = "https://8e98-34-125-61-89.ngrok-free.app/"
 
 def lambda_handler(event, context):
     try:
+        
         print("Received event:", json.dumps(event))
         
         # Cognitoで認証されたユーザー情報を取得
@@ -17,53 +20,56 @@ def lambda_handler(event, context):
             print(f"Authenticated user: {user_info.get('email') or user_info.get('cognito:username')}")
         
         # リクエストボディの解析
-        message = event['prompt']
+        body = json.loads(event['body'])
+        message = body['message']
+        conversation_history = body.get('conversationHistory', [])
+        
         print("Processing message:", message)
+        print("Using model:", MODEL_ID)
         
-        # # 会話履歴を使用
-        # messages = conversation_history.copy()
+        # 会話履歴を使用
+        messages = conversation_history.copy()
         
-        # # ユーザーメッセージを追加
-        # messages.append({
-        #     "role": "user",
-        #     "content": message
-        # })
+        # ユーザーメッセージを追加
+        messages.append({
+            "role": "user",
+            "content": message
+        })
         
-        # リクエストペイロード
+        # FastAPI用のリクエストペイロード
         request_payload = {
-            "prompt": message,
-            "max_new_tokens": 512,
+            "prompt": message,  # ユーザーからのメッセージを直接プロンプトとして使用
+            "max_new_tokens": 256,
             "do_sample": True,
             "temperature": 0.7,
             "top_p": 0.9
-            }
-        
-        print("payload:", json.dumps(request_payload))
-        
-        # APIを呼び出し
-        data = json.dumps(request_payload).encode("utf-8")
-        req = urllib.request.Request(
-             url=model_url,
-             data=data,
-             headers={"Content-Type": "application/json"},
-             method="POST",
-             )
+        }
+                
+        print("Calling FastAPI with payload:", json.dumps(request_payload))
 
-        with urllib.request.urlopen(req) as res:
-             response = json.loads(res.read().decode("utf-8"))
+        # FastAPI呼び出し
+        url = f"{MODEL_ID}/generate"
+        request = urllib.request.Request(
+            url=url,
+            data=json.dumps(request_payload).encode('utf-8'),  # JSONデータをバイト列に変換
+            headers={'Content-Type': 'application/json'},
+            method='POST'
+        )
         
-        # 応答の検証
-        if not response.get('generated_text'):
-            raise Exception("No response content from the model")
+        # レスポンスを解析
+        with urllib.request.urlopen(request) as response:
+            response_body = json.loads(response.read().decode('utf-8'))
+
+        print("FastAPI response:", json.dumps(response_body, default=str))
         
         # アシスタントの応答を取得
-        assistant_response = response["generated_text"]
+        assistant_response = response_body['generated_text']
         
-        # # アシスタントの応答を会話履歴に追加
-        # messages.append({
-        #     "role": "assistant",
-        #     "content": assistant_response
-        # })
+        # アシスタントの応答を会話履歴に追加
+        messages.append({
+            "role": "assistant",
+            "content": assistant_response
+        })
         
         # 成功レスポンスの返却
         return {
@@ -77,6 +83,7 @@ def lambda_handler(event, context):
             "body": json.dumps({
                 "success": True,
                 "response": assistant_response,
+                "conversationHistory": messages
             })
         }
         
